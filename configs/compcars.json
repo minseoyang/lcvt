@@ -36,10 +36,12 @@
     "mlp_ratio": 4,
     "dropout": 0.1,
     "embedding_dropout": 0.1,
-    "lod1_selection": false,
+    "lod1_selection": true,
     "alpha": 0.5,
     "ema_decay": 0.99,
-    "residual_multiplier": 2.0
+    "residual_multiplier": 2.0,
+    "lod2_selection": true,
+    "patch_mapping": "source"
   },
   "training": {
     "epochs": 301,
