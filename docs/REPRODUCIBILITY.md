@@ -1,31 +1,34 @@
 # Verification and reproducibility
 
-This repository preserves the supplied active LCvT experiment computation with early exit excluded. It has not been retrained on CompCars or ImageNet; the paper's accuracy and latency results have not been reproduced with this cleaned repository.
+This repository includes the full two-LoD branch framework, including the restored LoD 2 selection path. Early exit is omitted. It has not been retrained on CompCars or ImageNet; the paper's accuracy and latency results have not been reproduced with this cleaned repository.
 
-## Verified
+## Verified behavior
 
-- Seven CPU behavior tests: batch-one forward/backward with gradients in all coarse/fine encoders, original default token counts and repeated LoD 2 fine execution, output selection, optional LoD 1 helper, checkpoint round-trip, labels/split/path validation and input geometry checks.
-- **Whole-model comparison** against the supplied `new_LCvT.py`: identical weights, eval mode, dropout zero, early exit forced off, batch size two and 256×256 RGB input. Four outputs agree numerically for both the default disabled LoD 1 selection and its optional enabled path. Maximum absolute differences were below 5e-7 in the preparation run.
-- Explicit checkpoint conversion maps all required source tensors and rejects incompatible/missing parameters. Unused conv embeddings, the unused LoD 2 fine-position parameter and duplicate FFN aliases are the only discarded source keys.
-- One synthetic-data training epoch, checkpoint saving, separate evaluation and image inference through the public CLIs.
-- CompCars split counts, no duplicate/overlapping paths, and a complete consistent 431-to-75 hierarchy.
+- **Eleven CPU tests** cover batch-one training and gradients in both fine-position embeddings, both selection paths, one fine pass per branch, source patch indexing, all combinations of the two selection flags, requested-LoD execution, progressive caching, explicit coarse/fine requests, checkpoint round-trip, data validation and geometry checks.
+- High-confidence coarse predictions still execute both fine branches. There is no confidence-based exit option.
+- Stage/branch hooks show that a LoD 1 request omits stages 2–3 and LoD 2, while a LoD 2 request omits the LoD 1 branch. Sequential cached requests run each required backbone stage only once.
+- The optional spatial mapping covers the corresponding child cells and all fine patches, with finite inference at alpha 0, 0.5 and 1. It is not an accuracy reproduction.
+- **Whole-model comparison** uses the complete `CvT_branch.py` branch implementation, with main-source heads 3/3/3 and depths 3/4/5 explicitly supplied to both models. Shared weights, eval mode, zero dropout, batch two and 256×256 RGB random inputs are used. All four selection combinations are checked against all four logits.
+- Strict original-state conversion includes both LoD fine-position parameters. Only unused convolutional patch embeddings and duplicate FFN aliases are discarded.
+- Synthetic-data training for one epoch, checkpoint saving, separate evaluation and image inference through the public CLIs.
+- CompCars split counts, no duplicate/overlapping paths and a consistent complete 431-to-75 hierarchy.
 
-Verified environment: Windows, Python 3.13.2, torch 2.6.0+cu118, torchvision 0.21.0+cu118. Public behavior tests and synthetic CLI checks ran on CPU. Original/cleaned full-model comparisons ran on CUDA because the original code uses CUDA-only timing APIs.
+Verified environment: Windows, Python 3.13.2, torch 2.6.0+cu118 and torchvision 0.21.0+cu118. Public tests and synthetic CLI checks run on CPU. The original model comparison runs on CUDA because its forward includes CUDA-only timers.
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-Numerical agreement was tested using random inputs and weights. It does not establish original checkpoint provenance, real-image accuracy, stochastic training trajectory equivalence, mixed-precision equivalence or timing equivalence.
+The earlier verification against the uncommented `new_LCvT.py` loop concerned the initial incomplete release. It does not verify this restored framework. The current comparison instead checks the complete pre-exit branch sequence. Numerical agreement on random inputs does not establish real-dataset accuracy, stochastic training equivalence, original checkpoint provenance or latency equivalence.
 
-## Remaining requirements for a paper-result rerun
+## Requirements for a paper-result rerun
 
-1. Confirm which architecture and optimizer settings were used, given the paper/source differences.
-2. Confirm the CompCars split naming/protocol and obtain the exact ImageNet splits and 664-class hierarchy.
-3. Identify the trained checkpoint and its complete training settings, seed, augmentation and evaluation protocol.
-4. Evaluate the chosen checkpoint on the real dataset and record all four metrics separately.
-5. Define hardware, batch size, warm-up, CUDA synchronization and measurement scope before comparing latency. The original timing lists omitted stage 1 and mixed measurement scopes; they are not reused as benchmarks.
+1. Confirm final architecture, optimizer and selection settings, given the paper/source differences and original false selection defaults.
+2. Confirm CompCars split usage and obtain exact ImageNet splits and the 664-class hierarchy.
+3. Identify the original trained checkpoint and complete training/evaluation record.
+4. Evaluate all four outputs on real data using the chosen complete configuration.
+5. Record hardware, batch size, warm-up, CUDA synchronization and cache lifetime for latency measurements.
 
-The public code includes no early-exit option or LoD feature cache. `infer.py --lod` selects a returned head after all stages/heads execute. The paper's reported accuracy and timing comparisons also disabled early exit.
+The original timing lists are not adopted as benchmarks. The explicit cache implements the paper's LoD-transition workflow but does not establish the reported transition times.
 
-Original weights are not uploaded. `convert_checkpoint.py` accepts the original plain LCvT `state_dict` using `weights_only=True` and an explicit name mapping. Converted/new checkpoints use the `lcvt-experiment-v1` schema, and `load_model()` loads their tensors strictly.
+Original weights are not uploaded. New/converted checkpoints use `lcvt-framework-v2` and strict tensor loading. The initial `lcvt-experiment-v1` schema is rejected because it omitted the LoD 2 fine-position parameter and used another fine path. Convert the original complete `state_dict` rather than silently changing an old curated checkpoint.
