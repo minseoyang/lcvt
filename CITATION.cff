@@ -1,7 +1,7 @@
 cff-version: 1.2.0
-message: "Please cite the LCvT paper when referring to this research. This repository is a curated reference implementation."
+message: "Please cite the LCvT paper when referring to this research. This repository curates the active experiment code."
 type: software
-title: "LCvT: LoD-Aware Convolutional Vision Transformer — Curated Reference Implementation"
+title: "LCvT: LoD-Aware Convolutional Vision Transformer — Experiment Core"
 authors:
   - family-names: Yang
     given-names: Min-Seo

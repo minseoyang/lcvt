@@ -14,7 +14,7 @@ from lcvt.experiment import classification_loss, evaluate, load_config, write_js
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default="configs/compcars_source_dims.json")
+    parser.add_argument("--config", default="configs/compcars.json")
     parser.add_argument("--data-root", required=True)
     parser.add_argument("--train-csv", default="data/compcars/train.csv")
     parser.add_argument("--val-csv", default="data/compcars/validation.csv")
@@ -37,11 +37,11 @@ def main():
     train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=args.workers)
     val_loader = DataLoader(val_data, batch_size=batch_size, num_workers=args.workers)
     model = LCvT(config).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=settings.get("learning_rate", 1e-3),
-                                 betas=tuple(settings.get("betas", (0.9, 0.999))),
-                                 weight_decay=settings.get("weight_decay", 0.0))
+    optimizer = torch.optim.SGD(model.parameters(), lr=settings.get("learning_rate", 1e-3),
+                                momentum=settings.get("momentum", 0.9),
+                                weight_decay=settings.get("weight_decay", 1e-4))
     weights = settings.get("loss_weights", [1.0] * 4)
-    epochs = args.epochs if args.epochs is not None else settings.get("epochs", 200)
+    epochs = args.epochs if args.epochs is not None else settings.get("epochs", 301)
     if epochs < 1 or batch_size < 1:
         parser.error("epochs and batch_size must be positive.")
     output = Path(args.output)
@@ -63,7 +63,7 @@ def main():
         row = {"epoch": epoch, "train_loss": loss_sum / count, "validation": metrics}
         write_json(output / f"epoch_{epoch:03d}.json", row)
         print(row, flush=True)
-        checkpoint = {"format": "lcvt-curated-v1", "epoch": epoch,
+        checkpoint = {"format": "lcvt-experiment-v1", "epoch": epoch,
                       "model_config": config.to_dict(), "model_state": model.state_dict(),
                       "optimizer_state": optimizer.state_dict(), "training_config": settings,
                       "validation_metrics": metrics, "torch_version": str(torch.__version__)}
