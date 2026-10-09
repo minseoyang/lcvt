@@ -1,4 +1,4 @@
-"""Convert an original LCvT state_dict to the curated experiment key layout."""
+"""Convert an original LCvT state_dict to the complete branch key layout."""
 
 import argparse
 from pathlib import Path
@@ -22,7 +22,7 @@ def main():
     ignored = import_source_state(model, state)
     destination = Path(args.output)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"format":"lcvt-experiment-v1", "model_config":config.to_dict(),
+    torch.save({"format":"lcvt-framework-v2", "model_config":config.to_dict(),
                 "model_state":model.state_dict(), "training_config":training,
                 "converted_source_name":Path(args.source).name,
                 "ignored_inactive_or_alias_keys":ignored}, destination)
