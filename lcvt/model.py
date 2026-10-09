@@ -1,10 +1,10 @@
-"""LCvT experiment core, preserving the supplied active non-exit computation.
+"""LCvT with both LoD branches, selective refinement and LoD-aware inference.
 
-Commented LoD 2 selection and early exit are excluded. See IMPLEMENTATION.md
-for the intentionally retained residual and repeated-fine-pass conventions.
+The complete branch path is restored from new_LCvT.py and CvT_branch.py.
+Early exit is omitted: fine inference always follows coarse inference.
 """
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import math
 
 import torch
@@ -12,7 +12,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from .layers import ConvStage, LoDBlock
-from .patches import source_fine_indices, gather_tokens
+from .patches import source_fine_indices, spatial_fine_indices, gather_tokens
 
 
 @dataclass
@@ -32,7 +32,9 @@ class LCvTConfig:
     mlp_ratio: int = 4
     dropout: float = 0.1
     embedding_dropout: float = 0.1
-    lod1_selection: bool = False
+    lod1_selection: bool = True
+    lod2_selection: bool = True
+    patch_mapping: str = "source"
     alpha: float = 0.5
     ema_decay: float = 0.99
     residual_multiplier: float = 2.0
@@ -54,6 +56,10 @@ class LCvTConfig:
             raise ValueError("Encoder depths and MLP ratio must be positive.")
         if not 0 <= self.alpha <= 1 or not 0 <= self.ema_decay < 1:
             raise ValueError("alpha must be in [0, 1]; ema_decay must be in [0, 1).")
+        if self.patch_mapping not in ("source", "spatial"):
+            raise ValueError("patch_mapping must be 'source' or 'spatial'.")
+        if self.patch_mapping == "source" and self.coarse_scale < 2:
+            raise ValueError("The original four-child mapping requires coarse_scale >= 2.")
         for side, patch in zip((self.image_size // 4, self.image_size // 16), self.patch_sizes):
             if patch < 1 or side % (patch * self.coarse_scale):
                 raise ValueError("Each feature map must be divisible by patch_size * coarse_scale.")
@@ -63,7 +69,7 @@ class LCvTConfig:
 
 
 class LoDBranch(nn.Module):
-    def __init__(self, channels, side, patch, classes, config, selection=False, fine_repeats=1):
+    def __init__(self, channels, side, patch, classes, config, selection=True):
         super().__init__()
         self.patch = patch
         self.side = side
@@ -71,15 +77,15 @@ class LoDBranch(nn.Module):
         self.coarse_grid = self.coarse_side // patch
         self.fine_grid = side // patch
         self.selection = selection
-        self.fine_repeats = fine_repeats
+        self.patch_mapping = config.patch_mapping
         self.alpha = config.alpha
         self.ema_decay = config.ema_decay
         dim = config.branch_dim
         self.embedding = nn.Linear(channels * patch * patch, dim)
         self.cls_token = nn.Parameter(torch.zeros(1, 1, dim))
         self.coarse_position = nn.Parameter(torch.randn(1, self.coarse_grid ** 2 + 1, dim))
-        # Only LoD 1's non-commented optional path uses fine positions.
-        self.fine_position = nn.Parameter(torch.randn(1, self.fine_grid ** 2 + 1, dim)) if fine_repeats == 1 else None
+        # Both branches need fine positions for informative-patch selection.
+        self.fine_position = nn.Parameter(torch.randn(1, self.fine_grid ** 2 + 1, dim))
         self.embedding_dropout = nn.Dropout(config.embedding_dropout)
         self.coarse_blocks = nn.ModuleList([
             LoDBlock(dim, config.branch_heads, config.mlp_ratio, config.dropout, config.residual_multiplier)
@@ -128,24 +134,46 @@ class LoDBranch(nn.Module):
             count = math.ceil(self.alpha * self.coarse_grid ** 2)
             ranking = scores.argsort(1, descending=True)
             fine = fine + self.fine_position
-            children = source_fine_indices(ranking[:, :count], self.fine_grid)
+            important = ranking[:, :count]
+            children = (
+                source_fine_indices(important, self.fine_grid)
+                if self.patch_mapping == "source"
+                else spatial_fine_indices(important, self.coarse_grid, self.fine_grid)
+            )
             cls = children.new_zeros(batch, 1)
             selected = gather_tokens(fine, torch.cat((cls, children + 1), 1))
             retained = gather_tokens(initial, ranking[:, count:] + 1)
             fine = torch.cat((selected, retained), 1)
-        # LoD 2's active non-exit path applies the same fine blocks twice.
-        # Keep that behavior rather than silently changing checkpoint outputs.
-        for _ in range(self.fine_repeats):
-            fine = self.embedding_dropout(fine)
-            for block in self.fine_blocks:
-                fine, _ = block(fine)
+        # CvT_branch.py has one fine pass per branch. The extra LoD 2 pass in
+        # new_LCvT.py belonged to the added early-exit block and is removed.
+        fine = self.embedding_dropout(fine)
+        for block in self.fine_blocks:
+            fine, _ = block(fine)
         return self.head(fine[:, 0])
 
     def forward(self, features):
         coarse, initial, encoded, scores = self.coarse(features)
         return {"coarse": coarse, "fine": self.fine(features, initial, encoded, scores)}
 
+
+@dataclass
+class InferenceCache:
+    """Features for one fixed image batch and model in evaluation mode.
+
+    Make a new cache for a new frame, changed weights or a changed device.
+    This is an explicit in-memory API, not a DT server or tracking service.
+    """
+
+    owner: object = field(repr=False)
+    image: torch.Tensor = field(repr=False)
+    features: dict = field(default_factory=dict, repr=False)
+    coarse_states: dict = field(default_factory=dict, repr=False)
+    logits: dict = field(default_factory=dict, repr=False)
+
+
 class LCvT(nn.Module):
+    BRANCH_STAGES = {1: 0, 2: 2}
+
     def __init__(self, config=None):
         super().__init__()
         self.config = config or LCvTConfig()
@@ -159,10 +187,10 @@ class LCvT(nn.Module):
             ))
             input_channels = c.channels[i]
         self.branches = nn.ModuleList([
-            LoDBranch(channels, side, patch, classes, c, selection, repeats)
-            for channels, side, patch, classes, selection, repeats in zip(
+            LoDBranch(channels, side, patch, classes, c, selection)
+            for channels, side, patch, classes, selection in zip(
                 (c.channels[0], c.channels[2]), (c.image_size // 4, c.image_size // 16),
-                c.patch_sizes, c.num_classes, (c.lod1_selection, False), (1, 2),
+                c.patch_sizes, c.num_classes, (c.lod1_selection, c.lod2_selection),
             )
         ])
         self.apply(self._initialize)
@@ -182,19 +210,60 @@ class LCvT(nn.Module):
         if image.ndim != 4 or tuple(image.shape[1:]) != expected or image.shape[0] < 1:
             raise ValueError(f"Expected non-empty [B, {expected[0]}, {expected[1]}, {expected[2]}] input.")
 
-    def forward(self, image):
-        """Compute the four experiment outputs, with no early-exit branch."""
+    def forward(self, image, lods=(1, 2)):
+        """Train all four heads by default, or execute only requested branches."""
         self._validate_image(image)
-        stage1 = self.stages[0](image)
-        lod1 = self.branches[0](stage1)
-        stage3 = self.stages[2](self.stages[1](stage1))
-        return {"lod1": lod1, "lod2": self.branches[1](stage3)}
+        requested = (lods,) if isinstance(lods, int) else tuple(lods)
+        if not requested or len(set(requested)) != len(requested) or any(lod not in (1, 2) for lod in requested):
+            raise ValueError("Request LoD 1, LoD 2, or both without duplicates.")
+        last_stage = max(self.BRANCH_STAGES[lod] for lod in requested)
+        outputs = {}
+        features = image
+        for index in range(last_stage + 1):
+            features = self.stages[index](features)
+            for lod in requested:
+                if self.BRANCH_STAGES[lod] == index:
+                    outputs[f"lod{lod}"] = self.branches[lod - 1](features)
+        return outputs
 
-    @torch.no_grad()
-    def predict(self, image, lod=1, granularity="fine"):
-        """Select an experiment output; all stages/heads still execute."""
+    def _validate_prediction(self, lod, granularity):
         if self.training:
             raise RuntimeError("Call model.eval() before prediction.")
         if lod not in (1, 2) or granularity not in ("coarse", "fine"):
             raise ValueError("Use lod=1/2 and granularity='coarse'/'fine'.")
-        return self(image)[f"lod{lod}"][granularity]
+
+    @torch.no_grad()
+    def prepare_cache(self, image):
+        """Start a lazy cache for one image batch; no stages run yet."""
+        self._validate_prediction(1, "fine")
+        self._validate_image(image)
+        return InferenceCache(self, image.detach().clone())
+
+    @torch.no_grad()
+    def predict_from_cache(self, cache, lod=1, granularity="fine"):
+        """Continue a LoD request using already computed backbone features."""
+        self._validate_prediction(lod, granularity)
+        if not isinstance(cache, InferenceCache) or cache.owner is not self:
+            raise ValueError("The cache must be created by this model.")
+        key = (lod, granularity)
+        if key in cache.logits:
+            return cache.logits[key]
+        target = self.BRANCH_STAGES[lod]
+        for index in range(target + 1):
+            if index not in cache.features:
+                previous = cache.image if index == 0 else cache.features[index - 1]
+                cache.features[index] = self.stages[index](previous)
+        branch = self.branches[lod - 1]
+        if lod not in cache.coarse_states:
+            coarse, initial, encoded, scores = branch.coarse(cache.features[target])
+            cache.coarse_states[lod] = (initial, encoded, scores)
+            cache.logits[(lod, "coarse")] = coarse
+        if granularity == "fine":
+            cache.logits[key] = branch.fine(cache.features[target], *cache.coarse_states[lod])
+        return cache.logits[key]
+
+    @torch.no_grad()
+    def predict(self, image, lod=1, granularity="fine"):
+        """Execute the requested LoD branch, without confidence-based exits."""
+        self._validate_prediction(lod, granularity)
+        return self.predict_from_cache(self.prepare_cache(image), lod, granularity)
