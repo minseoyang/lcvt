@@ -4,7 +4,7 @@
 
 하나의 공유 CvT 백본과 LoD별 분기를 통해, 필요한 **Level of Detail**에 맞는 정보를 분류하는 연구입니다. CompCars에서는 LoD 1이 제조사, LoD 2가 차종에 해당합니다.
 
-이 저장소는 저자의 `new_LCvT.py`에서 **실제 실험에 사용한 활성 코드**를 중심으로 정리했습니다. 원본의 coarse/fine 계산을 유지하며, early exit와 주석 처리된 LoD2 패치 선택은 포함하지 않습니다.
+이 저장소는 저자의 `new_LCvT.py`와 같은 폴더의 `CvT_branch.py`를 대조해 **LoD1·LoD2 분기, coarse-to-fine 추론, 중요 패치 선택과 특징 재사용**을 함께 정리한 프레임워크입니다. 주석 처리되어 있던 LoD2 패치 선택도 복원했습니다. **Early exit만 제외**하며, fine 추론 요청은 항상 fine 단계까지 수행합니다.
 
 ## Paper
 
@@ -14,7 +14,7 @@ Min-Seo Yang†, Ji-Wan Kim†, Hyun-Suk Lee · *Electronics*, 2025, 14(19), 394
 
 논문에 명시된 Min-Seo Yang의 공동 기여는 software, validation, investigation, data curation, visualization 및 writing—review and editing입니다.
 
-## Experiment framework
+## Framework
 
 | 구성 | 역할 | 구현 |
 | --- | --- | --- |
@@ -22,18 +22,36 @@ Min-Seo Yang†, Ji-Wan Kim†, Hyun-Suk Lee · *Electronics*, 2025, 14(19), 394
 | LoD 1 branch | stage 1 특징으로 제조사 분류 | [model.py](lcvt/model.py) |
 | LoD 2 branch | stage 3 특징으로 차종 분류 | [model.py](lcvt/model.py) |
 | Coarse / fine inference | 각 LoD 안에서 두 해상도의 특징을 사용 | `LoDBranch.coarse()` / `fine()` |
+| Informative patch selection | EMA class attention으로 중요한 coarse 패치를 골라 fine 토큰과 결합 | [patches.py](lcvt/patches.py) |
 | Feature reuse | coarse encoder 특징을 fine 토큰에 전달 | `LoDBranch.fine()` |
 | Joint training | 두 LoD의 coarse/fine cross-entropy를 합산 | [experiment.py](lcvt/experiment.py) |
+| Requested-LoD routing | 요청한 LoD에 필요한 백본 단계와 해당 분기만 실행 | `forward(..., lods=...)` / `predict()` |
+| Dynamic LoD transitions | 같은 이미지의 백본 특징을 저장하고 다음 LoD 요청에서 재사용 | `prepare_cache()` / `predict_from_cache()` |
+| Hierarchy mapping | 세부 차종에서 상위 제조사 라벨을 유도 | `parent_labels()` |
 
 ```mermaid
-flowchart LR
+flowchart TB
     I[RGB image] --> S1[CvT stage 1]
-    S1 --> B1[LoD 1 branch]
     S1 --> S2[CvT stage 2]
     S2 --> S3[CvT stage 3]
-    S3 --> B2[LoD 2 branch]
-    B1 --> O1[Manufacturer]
-    B2 --> O2[Car model]
+    S1 --> C1
+    S3 --> C2
+    subgraph B1[LoD 1 branch]
+      C1[Coarse encoder] --> A1[EMA attention and patch selection]
+      A1 --> F1[Fine encoder]
+      C1 -. Feature reuse .-> F1
+      C1 --> H1[Shared classifier]
+      F1 --> H1
+    end
+    subgraph B2[LoD 2 branch]
+      C2[Coarse encoder] --> A2[EMA attention and patch selection]
+      A2 --> F2[Fine encoder]
+      C2 -. Feature reuse .-> F2
+      C2 --> H2[Shared classifier]
+      F2 --> H2
+    end
+    H1 --> O1[Manufacturer]
+    H2 --> O2[Car model]
     style S1 fill:#e8efff,stroke:#6b87ca
     style S2 fill:#e8efff,stroke:#6b87ca
     style S3 fill:#e8efff,stroke:#6b87ca
@@ -41,7 +59,9 @@ flowchart LR
     style B2 fill:#e9f7ef,stroke:#67a587
 ```
 
-**LoD와 coarse/fine은 다른 축입니다.** 제조사·차종은 분류 계층이고, coarse/fine은 각 분기 내부의 특징 처리 단계입니다. 원본 기본 설정에서는 LoD1의 선택적 패치 코드도 비활성화되어 있습니다.
+**LoD와 coarse/fine은 다른 축입니다.** 제조사·차종은 분류 계층이고, coarse/fine은 각 분기 내부의 특징 처리 단계입니다. 공개 프레임워크에서는 `lod1_selection=true`, `lod2_selection=true`로 **두 분기의 중요 패치 선택을 모두 활성화**했습니다. 원본 생성자의 false 기본값을 실험 결과의 확정 설정으로 해석하지 않습니다.
+
+패치 인덱스는 기본적으로 원본의 네 child 공식(`patch_mapping="source"`)을 유지합니다. 실제 coarse/fine 격자 비율에 따라 모든 대응 child를 선택하는 `"spatial"` 방식도 명시적 옵션으로 제공합니다. 두 방식의 차이와 설정 출처는 [구현 문서](docs/IMPLEMENTATION.md)에 설명했습니다.
 
 ## Repository scope
 
@@ -86,7 +106,23 @@ python evaluate.py --checkpoint runs/compcars/best.pt --data-root /path/to/compc
 python infer.py --checkpoint runs/compcars/best.pt --image /path/to/car.jpg --lod 2 --hierarchy data/compcars/hierarchy.json
 ```
 
-`infer.py --lod 1`은 제조사, `--lod 2`는 차종 출력을 선택합니다. `--granularity coarse`로 coarse 출력을 선택할 수 있습니다. **모든 백본 단계와 네 head가 계산되며**, LoD 선택에 따른 연산 생략이나 early exit는 수행하지 않습니다.
+`infer.py --lod 1`은 stage 1과 LoD1 분기만 실행해 제조사를 분류합니다. `--lod 2`는 stage 1–3과 LoD2 분기로 차종을 분류하며 LoD1 분기는 실행하지 않습니다. 기본 fine 요청에서는 coarse → 패치 선택 → fine 순서로 수행합니다. `--granularity coarse`는 coarse 출력만 명시적으로 요청하는 옵션이며, 신뢰도에 따른 early exit가 아닙니다.
+
+### Dynamic LoD requests
+
+학습의 `model(images)`는 두 LoD의 네 출력을 함께 계산합니다. 추론에서는 필요한 분기만 실행할 수 있고, **동일한 이미지**에서 LoD가 바뀔 때 백본 특징을 이어서 사용할 수 있습니다.
+
+```python
+from lcvt.experiment import load_model
+
+model, _ = load_model("runs/compcars/best.pt", "cpu")
+# images: the same preprocessed [B, 3, 256, 256] tensor
+cache = model.prepare_cache(images)
+manufacturer = model.predict_from_cache(cache, lod=1)  # stage 1 + LoD1
+car_model = model.predict_from_cache(cache, lod=2)     # reuse stage 1; stage 2–3 + LoD2
+```
+
+새 이미지·프레임, 변경된 가중치나 기기에는 새 cache를 만듭니다. LoD2에서 상위 제조사 라벨을 얻을 때는 `infer.py --hierarchy`의 라벨 트리를 사용할 수 있습니다. cache는 논문 Section 4.1의 특징 재사용 흐름을 실행 API로 정리한 것이며, DT 서버나 객체 추적 시스템은 포함하지 않습니다.
 
 ### Original checkpoints
 
@@ -99,9 +135,9 @@ python infer.py --checkpoint checkpoints/converted.pt --image /path/to/car.jpg -
 
 ## Implementation status
 
-원본의 **early exit를 끈 실행**과 정리본에 동일한 가중치를 넣어 네 출력을 비교했습니다. 256×256 입력에서 기본 설정과 LoD1의 비주석 선택 경로 모두 수치적으로 일치했습니다. CPU 배치 1, 역전파, 체크포인트 저장·로드 및 학습→평가→추론도 확인했습니다.
+복원한 **두 LoD 분기의 전체 경로**를 원본 `CvT_branch.py`와 같은 백본 설정·가중치로 비교했습니다. 256×256 입력에서 두 패치 선택 플래그의 네 조합 모두 네 출력이 수치적으로 일치했습니다(최대 절대 오차 6e-7 미만). CPU 테스트 11개와 합성 데이터 학습→평가→추론도 통과했습니다.
 
-출력을 임의로 바꾸지 않기 위해 원본의 중첩 residual과 LoD2 fine block의 반복 적용을 유지했습니다. 논문 표와 소스 기본값의 차이도 별도 문서에 기록했습니다. [구현 정리 내역](docs/IMPLEMENTATION.md) · [검증 조건과 재현 상태](docs/REPRODUCIBILITY.md)
+주석 속 LoD2 선택을 복원하면서 빠진 fine 위치 임베딩을 연결하고, early exit 코드 삽입으로 겹쳐진 fine loop를 제거했습니다. 원본의 중첩 residual은 유지했습니다. 체크포인트는 두 fine 위치 파라미터를 모두 포함하는 `lcvt-framework-v2`를 사용합니다. [구현 정리 내역](docs/IMPLEMENTATION.md) · [검증 조건과 재현 상태](docs/REPRODUCIBILITY.md)
 
 ## Reported results
 
