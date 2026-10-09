@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "Please cite the LCvT paper when referring to this research. This repository is a curated reference implementation."
+type: software
+title: "LCvT: LoD-Aware Convolutional Vision Transformer — Curated Reference Implementation"
+authors:
+  - family-names: Yang
+    given-names: Min-Seo
+  - family-names: Kim
+    given-names: Ji-Wan
+  - family-names: Lee
+    given-names: Hyun-Suk
+repository-code: "https://github.com/minseoyang/lcvt"
+preferred-citation:
+  type: article
+  title: "A Novel Convolutional Vision Transformer Network for Effective Level-of-Detail Awareness in Digital Twins"
+  authors:
+    - family-names: Yang
+      given-names: Min-Seo
+    - family-names: Kim
+      given-names: Ji-Wan
+    - family-names: Lee
+      given-names: Hyun-Suk
+  journal: Electronics
+  year: 2025
+  volume: "14"
+  issue: "19"
+  start: "3942"
+  doi: "10.3390/electronics14193942"
+  url: "https://www.mdpi.com/2079-9292/14/19/3942"

@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.DS_Store
+runs/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.zip
+*.tar*
+data/images/
+data/imagenet/
+wandb/
