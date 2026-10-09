@@ -1,4 +1,4 @@
-"""Select a coarse/fine experiment output for one image (no early exit)."""
+"""Run the requested LoD branch for one image (no early exit)."""
 
 import argparse
 import json
