@@ -53,8 +53,8 @@ def evaluate(model, loader, device, weights=(1.0, 1.0, 1.0, 1.0)):
 
 def load_model(path, device):
     checkpoint = torch.load(path, map_location="cpu", weights_only=True)
-    if not isinstance(checkpoint, dict) or checkpoint.get("format") != "lcvt-experiment-v1":
-        raise ValueError("Expected a curated LCvT checkpoint. Original research checkpoints need migration and validation.")
+    if not isinstance(checkpoint, dict) or checkpoint.get("format") != "lcvt-framework-v2":
+        raise ValueError("Expected lcvt-framework-v2. Convert the original state_dict with convert_checkpoint.py; v1 uses a different LoD 2 path.")
     model = LCvT(LCvTConfig(**checkpoint["model_config"]))
     model.load_state_dict(checkpoint["model_state"], strict=True)
     return model.to(device).eval(), checkpoint
