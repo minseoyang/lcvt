@@ -63,7 +63,7 @@ def main():
         row = {"epoch": epoch, "train_loss": loss_sum / count, "validation": metrics}
         write_json(output / f"epoch_{epoch:03d}.json", row)
         print(row, flush=True)
-        checkpoint = {"format": "lcvt-experiment-v1", "epoch": epoch,
+        checkpoint = {"format": "lcvt-framework-v2", "epoch": epoch,
                       "model_config": config.to_dict(), "model_state": model.state_dict(),
                       "optimizer_state": optimizer.state_dict(), "training_config": settings,
                       "validation_metrics": metrics, "torch_version": str(torch.__version__)}
