@@ -53,7 +53,7 @@ def import_source_state(model, source_state):
         target[key] = source_state[original]
         used.add(original)
     ignored = sorted(set(source_state) - used)
-    allowed = re.compile(r"LoD[12]_patch_embed_conv\..+|LoD2_pos_emb_fine|LoD[12]_blocks_[cf]\.\d+\.FFN\.(norm|fc1|fc2)\..+")
+    allowed = re.compile(r"LoD[12]_patch_embed_conv\..+|LoD[12]_blocks_[cf]\.\d+\.FFN\.(norm|fc1|fc2)\..+")
     unexpected = [key for key in ignored if not allowed.fullmatch(key)]
     if unexpected:
         raise ValueError(f"Unexpected source tensors: {unexpected}")
