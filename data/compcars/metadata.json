@@ -1,0 +1,29 @@
+{
+  "dataset": "CompCars",
+  "classes": {
+    "lod1": 75,
+    "lod2": 431
+  },
+  "splits": {
+    "train": {
+      "rows": 36334,
+      "source_file": "train.txt",
+      "sha256": "678a7108b224b4c6dccd8b5596826f4f5db0a78b16f171ddbb331f40ff6e44c0"
+    },
+    "validation": {
+      "rows": 5307,
+      "source_file": "valid.txt",
+      "sha256": "44ff8005b6736137389a074a0661e9c5d6cdd96674b3b116df50b8dbc73f7610"
+    },
+    "evaluation": {
+      "rows": 10442,
+      "source_file": "test.txt",
+      "sha256": "3e15d8803492e9a28c03cf96be3330ee9660e735bd89006c65dbb7a17d9ce86a"
+    }
+  },
+  "label_base": 0,
+  "images_included": false,
+  "split_overlap_count": 0,
+  "hierarchy_conflict_count": 0,
+  "note": "evaluation.csv matches the paper's 10442-image validation count; the source script separately uses valid.txt (5307). Exact experiment split usage is unverified."
+}
